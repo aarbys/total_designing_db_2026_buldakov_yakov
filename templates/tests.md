@@ -10,9 +10,9 @@
 
 | Параметр | Значение |
 |---|---|
-| PostgreSQL version | `SELECT version();` → 15+ |
-| Дата проверки | ___ |
-| Схема | `<фамилия>_food` |
+| PostgreSQL version | `SELECT version();` → 17.2 |
+| Дата проверки | _14.11.2026__ |
+| Схема | `buldakov_food` |
 | Роль-аудитор | `inspector` |
 
 Все проверки — под `inspector`, если не указано иное.
