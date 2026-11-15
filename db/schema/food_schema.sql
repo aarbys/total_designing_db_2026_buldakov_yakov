@@ -5,7 +5,7 @@
 -- Dumped from database version 17.2
 -- Dumped by pg_dump version 17.0
 
--- Started on 2026-11-15 16:49:44
+-- Started on 2026-11-15 19:02:47
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -28,6 +28,16 @@ CREATE SCHEMA buldakov_food;
 
 
 ALTER SCHEMA buldakov_food OWNER TO postgres;
+
+--
+-- TOC entry 8 (class 2615 OID 16856)
+-- Name: exts; Type: SCHEMA; Schema: -; Owner: postgres
+--
+
+CREATE SCHEMA exts;
+
+
+ALTER SCHEMA exts OWNER TO postgres;
 
 --
 -- TOC entry 888 (class 1247 OID 16884)
@@ -1152,6 +1162,7 @@ CREATE PROCEDURE buldakov_food.insert_test_data(IN value integer)
     LANGUAGE plpgsql
     AS $$
 DECLARE
+	-- оставляем
     client_ids UUID[];
     courier_ids UUID[];
     product_category_ids UUID[];
@@ -1160,62 +1171,657 @@ DECLARE
     restaurant_ids UUID[];
     product_ids UUID[];
 	order_ids UUID[];
+	-- Курьеры, категории и клиенты
+	new_client_id UUID;
+    new_courier_id UUID;
+    new_product_category_id UUID;
+    new_phone VARCHAR(20);
+    is_exists BOOLEAN;
+    new_courier_status buldakov_food.courier_status;
+    hire_date DATE;
+    dismissal_date DATE;
+	--
+	-- Адреса
+	new_address_id UUID;
+    new_apartment VARCHAR(20);
+	-- Рестораны
+	new_restaurant_id UUID;
+    new_work_start TIME;
+    new_work_end TIME;
+	new_restaurant_status buldakov_food.restaurant_status;
+	--Продукты
+	new_product_id UUID;
+    new_product_status buldakov_food.product_status;
+	-- Заказы
+	new_order_id UUID;
+    new_order_timestamp TIMESTAMP;
+    new_order_client_id UUID;
+    new_order_address_id UUID;
+    new_order_restaurant_id UUID;
+    new_order_courier_id UUID;
+
+    order_product_count INT;
+    order_product_ids UUID[];
+    product_quantities NUMERIC[];
+
+    new_order_amount NUMERIC;
+    new_commission NUMERIC;
+    new_total_amount NUMERIC;
+
+    new_product_price NUMERIC;
+    new_quantity NUMERIC;
+
+    first_product_id UUID;
+    first_product_price NUMERIC;
+    first_product_quantity NUMERIC;
+
+    new_order_status buldakov_food.order_status;
+    new_pay_status buldakov_food.pay_status;
+    new_delivery_timestamp TIMESTAMP;
+
+    status_roll INT;
+	-- платежки
+    current_order_id UUID;
+
+    new_payment_id UUID;
+    new_payment_type buldakov_food.payment_type;
+    new_payment_status buldakov_food.payment_status;
+
+    new_payment_amount NUMERIC;
+    new_payment_timestamp TIMESTAMP;
+    new_transaction_id VARCHAR(255);
+
+    current_order_timestamp TIMESTAMP;
+    current_pay_status buldakov_food.pay_status;
+	--Выплаты
+    current_courier_id UUID;
+
+    current_coefficient NUMERIC;
+    new_coefficient NUMERIC;
+
+    current_dismissal_date DATE;
+	current_hire_date DATE;
+    month_start DATE;
+    month_end DATE;
+
+    delivered_orders_count INT;
+    total_commission NUMERIC;
+    payment_amount NUMERIC;
+
+	-- Ревью
+	new_review_id UUID;
+    new_entity_id UUID;
+    new_entity_type buldakov_food.review_entity_type;
+
+    new_review_timestamp TIMESTAMP;
+    new_description TEXT;
+    new_rating NUMERIC;
 BEGIN
 RAISE NOTICE 'Передано значение: %', value;
 	if value <=0 then
 	RAISE EXCEPTION 'Значение должно быть больше нуля';
 	end if;
---Благодаря рефакторингу кода все внутренний функции по созданию вынесены
 --Создаем клиентов, курьеров и категории продуктов
-call buldakov_food.generate_base_data(
-	value,
-	client_ids,
-	courier_ids,
-	product_category_ids
-);
+for i in 1..value loop
+	--Генерация клиента
+	--Генерация номера телефона
+	loop
+		new_phone := '+7' || LPAD(FLOOR(RANDOM() * 1000000000)::text, 10, '0');
+		select exists(select 1 from buldakov_food.client where phone_number = new_phone) into is_exists;
+		exit when not is_exists;
+	end loop;
+	--Генерация айдишки для последующей связи с адресами
+	new_client_id := exts.uuid_generate_v4();
+	client_ids := array_append(client_ids,new_client_id);
+	insert into buldakov_food.client values 
+	(	new_client_id,
+		'client_' || exts.uuid_generate_v4()::text,
+		md5(random()::text),
+		new_phone
+	);
+	--Генерация курьера
+	loop 
+		new_phone := '7' || LPAD(FLOOR(RANDOM() * 1000000000)::text, 10, '0');
+		select exists(select 1 from buldakov_food.courier where phone_number = new_phone) into is_exists;
+		exit when not is_exists;
+	end loop;
+	--Статус курьеру выдаем, с проверкой что хотя бы 1 у нас не уволенный
+	-- Хотя бы 1 курьер будет работать у нас
+	if i = 1 then
+		new_courier_status := 'свободен';
+		hire_date := CURRENT_DATE-180;
+		dismissal_date := NULL;
+	else
+		new_courier_status :=
+		    (enum_range(NULL::buldakov_food.courier_status))
+		    [floor(random() * 4 + 1)::INT];
+		hire_date := CURRENT_DATE - floor(random()*180)::int;
+		--Дата увольнения если он уволенный
+		if new_courier_status = 'уволен' then
+			dismissal_date := hire_date + floor(random() * (CURRENT_DATE- hire_date +1))::int;
+		else dismissal_date := null;
+		end if;
+	end if;
+	
+	new_courier_id := exts.uuid_generate_v4();
+	courier_ids = array_append(courier_ids, new_courier_id);
+	insert into buldakov_food.courier(
+		courier_id,
+		phone_number,
+		status,
+		hire_date,
+		dismissal_date,
+		coefficient,
+		last_name,
+		first_name,
+		middle_name
+		) values 
+	(	new_courier_id,
+		new_phone,
+		new_courier_status,
+		hire_date,
+		dismissal_date,
+		0.1,
+		'Фамилия_' || left(exts.uuid_generate_v4()::text, 5),
+		'Имя' || left(exts.uuid_generate_v4()::text, 5),
+		'Отчество' || left(exts.uuid_generate_v4()::text, 5)
+	);
+	--категории продуктов
+	new_product_category_id := exts.uuid_generate_v4();
+	product_category_ids :=
+            array_append(product_category_ids, new_product_category_id);
+	insert into buldakov_food.product_category values (
+		new_product_category_id,
+		'product_cat_' || exts.uuid_generate_v4()::text
+	);
+end loop;
 --Создаем адреса
-call buldakov_food.generate_addresses(
-	value,
-	restaurant_address_ids,
-	client_address_ids
-);
+	restaurant_address_ids := ARRAY[]::UUID[];
+    client_address_ids := ARRAY[]::UUID[];
+	--
+	--
+	for i in 1..value*5 loop
+    IF FLOOR(RANDOM() * 2)::INT = 1 THEN
+        new_apartment := NULL;
+    ELSE
+        new_apartment := FLOOR(RANDOM() * 200 + 1)::text;
+    END IF;
+	-- айдишка адреса, потом для связи с ресторанами понадобится
+	new_address_id := exts.uuid_generate_v4();
+	insert into buldakov_food.address values 
+	(	new_address_id,
+		'street_' || exts.uuid_generate_v4()::text,
+		FLOOR(RANDOM()*300 + 1)::text,
+		new_apartment
+	);
+	if i <= value then
+		restaurant_address_ids := array_append(
+			restaurant_address_ids,
+			new_address_id
+		);
+	else client_address_ids := array_append(
+			client_address_ids,
+			new_address_id
+		);
+	end if;
+end loop;
 --Создаем рестораны
-call buldakov_food.generate_restaurants(
-	value,
-	restaurant_address_ids,
-	restaurant_ids
-);
+restaurant_ids := ARRAY[]::UUID[];
+    -- Создаём рестораны
+    FOR i IN 1..value LOOP
+        --Время открытия
+		-- max start = 10:00
+        new_work_start :=
+            TIME '00:00' +
+            FLOOR(RANDOM() * 600)::INT * INTERVAL '1 minute';
+        --время закрытия
+		--max close = max start + 10hours + 2 hours = 22:00
+        new_work_end :=
+            new_work_start +
+            FLOOR(RANDOM() * 600)::INT * INTERVAL '1 minute' +
+            INTERVAL '2 hours';
+        new_restaurant_id := exts.uuid_generate_v4();
+		new_restaurant_status :=
+		    (enum_range(NULL::buldakov_food.restaurant_status))
+		    [floor(random() * 2 + 1)::INT];
+        INSERT INTO buldakov_food.restaurant(
+			restaurant_id,
+			restaurant_name,
+			address_id,
+			description,
+			work_start,
+			work_end,
+			rating,
+			status,
+			inn,
+			ogrn,
+			bank_account
+			) VALUES (
+            new_restaurant_id,
+            'restaurant_' || exts.uuid_generate_v4()::TEXT,
+            restaurant_address_ids[i],
+            'Описание ресторана ' ||
+                FLOOR(i * RANDOM() * 1000)::TEXT,
+            new_work_start,
+            new_work_end,
+            NULL,
+            new_restaurant_status,
+			lpad((FLOOR(RANDOM() * 1000000000000)::bigint)::text,12,'0'), -- 12 значный ИНН
+			lpad((FLOOR(RANDOM() * 1000000000000)::bigint)::text,15,'0'), -- 15 значный огрн
+			lpad(FLOOR(RANDOM() * 1000000000000)::bigint::text,20,'0') -- 20 значный рассчетный счет
+        );
+        restaurant_ids := ARRAY_APPEND(
+            restaurant_ids,
+            new_restaurant_id
+        );
+    END LOOP;
+    RAISE NOTICE 'Было создано: % ресторанов', value;
 --Ну тут связь адреса и клиента
-call buldakov_food.generate_client_addresses(
-	value,
-	client_ids,
-	client_address_ids
-);
+    FOR i IN 1..value LOOP
+        FOR j IN 1..4 LOOP
+            INSERT INTO buldakov_food.client_address VALUES
+            (
+                client_ids[i],
+                client_address_ids[(i-1)*4+j]
+            );
+        END LOOP;
+    END LOOP;
+    RAISE NOTICE 'Было создано: % связей клиента и адреса', value * 4;
 -- Продукты для ресторанов
-call buldakov_food.generate_products(
-	value,
-	restaurant_ids,
-	product_category_ids,
-	product_ids
-);
+product_ids := ARRAY[]::UUID[];
 
+    FOR i IN 1..value LOOP
+        FOR j IN 1..5 LOOP
+            new_product_id := exts.uuid_generate_v4();
+			if j = 1 then
+				new_product_status := 'доступно';
+			else
+				new_product_status :=
+			    	(enum_range(NULL::buldakov_food.product_status))
+			    	[floor(random() * 3 + 1)::INT];
+			end if;
+            INSERT INTO buldakov_food.product VALUES (
+                new_product_id,
+                'Product_' || exts.uuid_generate_v4()::TEXT,
+                product_category_ids[
+                    FLOOR(RANDOM() * CARDINALITY(product_category_ids) + 1)::INT
+                ],
+                FLOOR(RANDOM() * 1000 + 1),
+                restaurant_ids[i],
+                NULL,
+                NULL,
+                new_product_status,
+                'Какое-то описание продукта ' || exts.uuid_generate_v4()::TEXT
+            );
+
+            product_ids := ARRAY_APPEND(product_ids, new_product_id);
+        END LOOP;
+    END LOOP;
+
+    RAISE NOTICE 'Было создано: % продуктов для % ресторанов', value * 5, value;
 -- Делаем заказы и платежка к ним
-call buldakov_food.generate_orders(
-    value,
-    client_ids,
-    courier_ids,
-    restaurant_ids,
-    order_ids
-);
-call buldakov_food.generate_payments(order_ids);
+order_ids := ARRAY[]::UUID[];
+    FOR i IN 1..value*5 LOOP
+
+        -- Время заказа
+        new_order_timestamp :=
+            CURRENT_TIMESTAMP - RANDOM() * INTERVAL '180 days';
+
+        -- ID заказа
+        new_order_id := exts.uuid_generate_v4();
+
+        -- ID клиента
+        new_order_client_id :=
+            client_ids[FLOOR(RANDOM()*value)::INT+1];
+
+        -- ID адреса
+        SELECT address_id
+        FROM buldakov_food.client_address
+        WHERE client_id = new_order_client_id
+        ORDER BY RANDOM()
+        LIMIT 1
+        INTO new_order_address_id;
+
+        -- ID ресторана
+        new_order_restaurant_id :=
+            restaurant_ids[FLOOR(RANDOM()*value)::INT+1];
+
+        -- Подбор курьера
+        SELECT courier_id
+        FROM buldakov_food.courier с
+        WHERE (
+            с.hire_date <= new_order_timestamp::DATE
+            AND (
+                с.dismissal_date IS NULL
+                OR с.dismissal_date >= new_order_timestamp::DATE
+            )
+            AND с.courier_id = ANY(courier_ids)
+        )
+        ORDER BY RANDOM()
+        LIMIT 1
+        INTO new_order_courier_id;
+
+        -- Подбираем товары для заказа
+        order_product_count := FLOOR(RANDOM()*5)::INT + 1;
+
+        SELECT ARRAY(
+            SELECT product_id
+            FROM buldakov_food.product
+            WHERE restaurant_id = new_order_restaurant_id
+				AND status = 'доступно'
+            ORDER BY RANDOM()
+            LIMIT order_product_count
+        )
+        INTO order_product_ids;
+
+        new_order_amount := 0;
+        first_product_id := NULL;
+        product_quantities := ARRAY[]::NUMERIC[];
+
+        FOREACH new_product_id IN ARRAY order_product_ids LOOP
+
+            SELECT price
+            FROM buldakov_food.product
+            WHERE product_id = new_product_id
+            INTO new_product_price;
+
+            new_quantity := FLOOR(RANDOM() * 3 + 1);
+
+            IF first_product_id IS NULL THEN
+                first_product_id := new_product_id;
+                first_product_price := new_product_price;
+                first_product_quantity := new_quantity;
+            END IF;
+
+            product_quantities :=
+                ARRAY_APPEND(product_quantities, new_quantity);
+
+            new_order_amount :=
+                new_order_amount + new_product_price * new_quantity;
+
+        END LOOP;
+
+        -- Сумма заказа до 1000 рублей
+        WHILE new_order_amount < 1000 LOOP
+
+            first_product_quantity := first_product_quantity + 1;
+
+            new_order_amount :=
+                new_order_amount + first_product_price;
+
+        END LOOP;
+
+        product_quantities[1] := first_product_quantity;
+
+        -- Комиссия и итоговая сумма
+        new_commission := new_order_amount * 0.1;
+        new_total_amount := new_order_amount + new_commission;
+
+        -- Статус заказа
+        status_roll := FLOOR(RANDOM()*10)::INT + 1;
+
+        IF status_roll <= 6 THEN
+            new_order_status := 'доставлен';
+            new_pay_status := 'оплачен';
+
+            new_delivery_timestamp := least(
+                new_order_timestamp + RANDOM() * INTERVAL '24 hours',
+					CURRENT_TIMESTAMP
+				);
+        ELSIF status_roll = 7 THEN
+            new_order_status := 'отменён';
+            new_pay_status := 'ошибка';
+            new_delivery_timestamp := NULL;
+
+        ELSIF status_roll = 8 THEN
+            new_order_status := 'создан';
+            new_pay_status := 'ожидает';
+            new_delivery_timestamp := NULL;
+
+        ELSIF status_roll = 9 THEN
+            new_order_status := 'готовится';
+            new_pay_status := 'оплачен';
+            new_delivery_timestamp := NULL;
+
+        ELSE
+            new_order_status := 'в_доставке';
+            new_pay_status := 'ожидает';
+            new_delivery_timestamp := NULL;
+
+        END IF;
+
+        -- Создаём заказ
+        INSERT INTO buldakov_food."order" VALUES (
+            new_order_id,
+            new_order_courier_id,
+            new_order_client_id,
+            new_order_address_id,
+            new_order_restaurant_id,
+            new_order_timestamp,
+            new_delivery_timestamp,
+            new_order_amount,
+            new_commission,
+            new_total_amount,
+            new_order_status,
+            new_pay_status,
+            'Тестовый заказ'
+        );
+		order_ids := ARRAY_APPEND(order_ids, new_order_id);
+        -- Состав заказа
+		order_product_count := CARDINALITY(order_product_ids);
+        FOR j IN 1..order_product_count LOOP
+
+            INSERT INTO buldakov_food.order_structure VALUES (
+                new_order_id,
+                order_product_ids[j],
+                product_quantities[j]
+            );
+
+        END LOOP;
+
+    END LOOP;
+--платежки
+FOREACH current_order_id IN ARRAY order_ids LOOP
+        -- Данные заказа
+        SELECT total_amount, order_timestamp, pay_status
+        FROM buldakov_food."order"
+        WHERE order_id = current_order_id
+        INTO
+            new_payment_amount,
+            current_order_timestamp,
+            current_pay_status;
+        -- ID платежа
+        new_payment_id := exts.uuid_generate_v4();
+        -- Тип платежа
+		new_payment_type :=
+			    (enum_range(NULL::buldakov_food.payment_type))
+			    [floor(random() * 3 + 1)::INT];
+        -- Статус платежа
+        IF current_pay_status = 'оплачен' THEN
+            new_payment_status := 'успех';
+        ELSIF current_pay_status = 'ошибка' THEN
+            new_payment_status := 'ошибка';
+        ELSE
+            new_payment_status := 'в_обработке';
+        END IF;
+        -- Время
+        new_payment_timestamp := least(
+            current_order_timestamp + RANDOM() * INTERVAL '1 hour',
+			CURRENT_TIMESTAMP);
+        -- ID транзакции
+        new_transaction_id := exts.uuid_generate_v4()::TEXT;
+        INSERT INTO buldakov_food.payment VALUES (
+            new_payment_id,
+            current_order_id,
+            new_payment_type,
+            new_payment_amount,
+            new_transaction_id,
+            new_payment_timestamp,
+            new_payment_status
+        );
+    END LOOP;
 -- Выплаты курьерам
-call buldakov_food.generate_courier_pay(
-    courier_ids
-);
+-- Перебираем всех созданных курьеров
+    FOREACH current_courier_id IN ARRAY courier_ids LOOP
+
+        -- Получаем коэффициент и дату увольнения
+        SELECT c.coefficient, c.hire_date, c.dismissal_date
+        FROM buldakov_food.courier c
+        WHERE courier_id = current_courier_id
+        INTO current_coefficient, current_hire_date, current_dismissal_date;
+
+        -- Последние 6 месяцев
+        FOR i IN 0..5 LOOP
+
+            month_start :=
+                (
+                    DATE_TRUNC('month', CURRENT_DATE)
+                    - (6 - i) * INTERVAL '1 month'
+                )::DATE;
+
+            month_end :=
+                (month_start + INTERVAL '1 month')::DATE;
+			if current_hire_date >= month_end then
+				continue;
+			end if;
+			if current_dismissal_date is not null and current_dismissal_date < month_start
+				then
+					continue;
+			end if;
+            -- Количество доставленных заказов и сумма комиссий
+            SELECT
+                COUNT(*),
+                COALESCE(SUM(commission), 0)
+            FROM buldakov_food."order"
+            WHERE courier_id = current_courier_id
+                AND status = 'доставлен'
+                AND delivery_timestamp >= month_start
+                AND delivery_timestamp < month_end
+            INTO delivered_orders_count, total_commission;
+
+            -- Рассчитываем выплату
+            payment_amount :=
+                ROUND(total_commission * current_coefficient, 2);
+
+            -- Сохраняем выплату
+            INSERT INTO buldakov_food.courier_pay VALUES (
+                EXTRACT(YEAR FROM month_start)::INT,
+                EXTRACT(MONTH FROM month_start)::INT,
+                current_courier_id,
+                payment_amount,
+                current_coefficient
+            );
+
+            -- Рассчитываем коэффициент на следующий месяц
+            IF delivered_orders_count <= 150 THEN
+                new_coefficient := 0.1;
+
+            ELSIF delivered_orders_count <= 250 THEN
+                new_coefficient := 0.2;
+
+            ELSIF delivered_orders_count <= 500 THEN
+                new_coefficient := 0.3;
+
+            ELSE
+                new_coefficient := 0.5;
+
+            END IF;
+
+            -- Обновляем коэффициент, если месяц завершён
+            -- и курьер не был уволен в течение этого месяца
+            IF month_end <= DATE_TRUNC('month', CURRENT_DATE)::DATE
+                AND (
+                    current_dismissal_date IS NULL
+                    OR current_dismissal_date >= month_end
+                )
+            THEN
+
+                current_coefficient := new_coefficient;
+
+                UPDATE buldakov_food.courier
+                SET coefficient = new_coefficient
+                WHERE courier_id = current_courier_id;
+
+            END IF;
+
+        END LOOP;
+
+    END LOOP;
+
+
 --Ревьюшка
-call buldakov_food.generate_reviews(
-    order_ids
-);
+    -- Отзыв = 1 заказ
+    for i in 1..CARDINALITY(order_ids) LOOP
+		loop
+			--Забираем то на что у нас ревьюшка
+			new_entity_type :=
+			    (enum_range(NULL::buldakov_food.review_entity_type))
+			    [floor(random() * 3 + 1)::INT];
+			-- выбираем заказ персоны
+			select order_id,client_id,order_timestamp from buldakov_food."order"
+			where order_id = order_ids[i]
+			order by random()
+			limit 1 into new_order_id,new_client_id,new_review_timestamp;
+			--теперь смотрим что выпало и в зависимости берем нужную айдишку
+	
+			if new_entity_type = 'заказ' then
+				new_entity_id := new_order_id;
+			elsif new_entity_type = 'ресторан' then
+				select restaurant_id 
+				from buldakov_food."order"
+				where order_id = new_order_id into new_entity_id;
+			else
+				select product_id 
+				from buldakov_food.order_structure
+				where order_id = new_order_id
+				order by random()
+				limit 1 into new_entity_id;
+			end if; 
+			 
+			if not exists (
+				select 1 from buldakov_food.review
+				where order_id = new_order_id
+				and entity_type = new_entity_type
+				and entity_id = new_entity_id
+				) then exit;
+			end if;
+		end loop;
+
+        -- Генерируем дату отзыва после создания заказа
+        new_review_timestamp :=
+            new_review_timestamp
+            + RANDOM() * (CURRENT_TIMESTAMP - new_review_timestamp);
+
+        new_review_id := exts.uuid_generate_v4();
+
+        new_rating := FLOOR(RANDOM() * 5 + 1);
+
+        new_description := (
+            ARRAY[
+                'Круто',
+                'Все супер',
+                'Not bad',
+                'can be better',
+                'Tasty'
+            ]
+        )[FLOOR(RANDOM() * 5 + 1)::INT];
+
+        INSERT INTO buldakov_food.review VALUES (
+            new_review_id,
+            new_client_id,
+            new_review_timestamp,
+            new_entity_id,
+            new_entity_type,
+            new_order_id,
+            new_description,
+            NULL,
+            new_rating
+        );
+
+    END LOOP;
+
+    RAISE NOTICE 'Создано отзывов: %', CARDINALITY(order_ids);
+
 END;
 $$;
 
@@ -1954,6 +2560,15 @@ GRANT ALL ON SCHEMA buldakov_food TO inspector;
 
 --
 -- TOC entry 4977 (class 0 OID 0)
+-- Dependencies: 8
+-- Name: SCHEMA exts; Type: ACL; Schema: -; Owner: postgres
+--
+
+GRANT USAGE ON SCHEMA exts TO inspector;
+
+
+--
+-- TOC entry 4978 (class 0 OID 0)
 -- Dependencies: 261
 -- Name: PROCEDURE add_product(IN product_name character varying, IN product_category_id uuid, IN price numeric, IN restaurant_id uuid, IN photo_url text, IN rating numeric, IN status buldakov_food.product_status, IN description text); Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -1962,7 +2577,7 @@ GRANT ALL ON PROCEDURE buldakov_food.add_product(IN product_name character varyi
 
 
 --
--- TOC entry 4978 (class 0 OID 0)
+-- TOC entry 4979 (class 0 OID 0)
 -- Dependencies: 264
 -- Name: PROCEDURE courier_salary(); Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -1971,7 +2586,7 @@ GRANT ALL ON PROCEDURE buldakov_food.courier_salary() TO inspector;
 
 
 --
--- TOC entry 4979 (class 0 OID 0)
+-- TOC entry 4980 (class 0 OID 0)
 -- Dependencies: 260
 -- Name: PROCEDURE erase_test_data(); Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -1980,7 +2595,7 @@ GRANT ALL ON PROCEDURE buldakov_food.erase_test_data() TO inspector;
 
 
 --
--- TOC entry 4980 (class 0 OID 0)
+-- TOC entry 4981 (class 0 OID 0)
 -- Dependencies: 254
 -- Name: PROCEDURE generate_addresses(IN p_value integer, INOUT restaurant_address_ids uuid[], INOUT client_address_ids uuid[]); Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -1989,7 +2604,7 @@ GRANT ALL ON PROCEDURE buldakov_food.generate_addresses(IN p_value integer, INOU
 
 
 --
--- TOC entry 4981 (class 0 OID 0)
+-- TOC entry 4982 (class 0 OID 0)
 -- Dependencies: 266
 -- Name: PROCEDURE generate_base_data(IN p_value integer, INOUT client_ids uuid[], INOUT courier_ids uuid[], INOUT product_category_ids uuid[]); Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -1998,7 +2613,7 @@ GRANT ALL ON PROCEDURE buldakov_food.generate_base_data(IN p_value integer, INOU
 
 
 --
--- TOC entry 4982 (class 0 OID 0)
+-- TOC entry 4983 (class 0 OID 0)
 -- Dependencies: 257
 -- Name: PROCEDURE generate_client_addresses(IN p_value integer, IN client_ids uuid[], IN client_address_ids uuid[]); Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -2007,7 +2622,7 @@ GRANT ALL ON PROCEDURE buldakov_food.generate_client_addresses(IN p_value intege
 
 
 --
--- TOC entry 4983 (class 0 OID 0)
+-- TOC entry 4984 (class 0 OID 0)
 -- Dependencies: 267
 -- Name: PROCEDURE generate_courier_pay(IN courier_ids uuid[]); Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -2016,7 +2631,7 @@ GRANT ALL ON PROCEDURE buldakov_food.generate_courier_pay(IN courier_ids uuid[])
 
 
 --
--- TOC entry 4984 (class 0 OID 0)
+-- TOC entry 4985 (class 0 OID 0)
 -- Dependencies: 256
 -- Name: PROCEDURE generate_orders(IN p_value integer, IN client_ids uuid[], IN courier_ids uuid[], IN restaurant_ids uuid[], INOUT order_ids uuid[]); Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -2025,7 +2640,7 @@ GRANT ALL ON PROCEDURE buldakov_food.generate_orders(IN p_value integer, IN clie
 
 
 --
--- TOC entry 4985 (class 0 OID 0)
+-- TOC entry 4986 (class 0 OID 0)
 -- Dependencies: 262
 -- Name: PROCEDURE generate_payments(IN p_order_ids uuid[]); Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -2034,7 +2649,7 @@ GRANT ALL ON PROCEDURE buldakov_food.generate_payments(IN p_order_ids uuid[]) TO
 
 
 --
--- TOC entry 4986 (class 0 OID 0)
+-- TOC entry 4987 (class 0 OID 0)
 -- Dependencies: 255
 -- Name: PROCEDURE generate_products(IN p_value integer, IN restaurant_ids uuid[], IN product_category_ids uuid[], INOUT product_ids uuid[]); Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -2043,7 +2658,7 @@ GRANT ALL ON PROCEDURE buldakov_food.generate_products(IN p_value integer, IN re
 
 
 --
--- TOC entry 4987 (class 0 OID 0)
+-- TOC entry 4988 (class 0 OID 0)
 -- Dependencies: 265
 -- Name: PROCEDURE generate_restaurants(IN p_value integer, IN restaurant_address_ids uuid[], INOUT restaurant_ids uuid[]); Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -2052,7 +2667,7 @@ GRANT ALL ON PROCEDURE buldakov_food.generate_restaurants(IN p_value integer, IN
 
 
 --
--- TOC entry 4988 (class 0 OID 0)
+-- TOC entry 4989 (class 0 OID 0)
 -- Dependencies: 253
 -- Name: PROCEDURE generate_reviews(IN p_order_ids uuid[]); Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -2061,7 +2676,7 @@ GRANT ALL ON PROCEDURE buldakov_food.generate_reviews(IN p_order_ids uuid[]) TO 
 
 
 --
--- TOC entry 4989 (class 0 OID 0)
+-- TOC entry 4990 (class 0 OID 0)
 -- Dependencies: 258
 -- Name: FUNCTION get_statistic(); Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -2070,7 +2685,7 @@ GRANT ALL ON FUNCTION buldakov_food.get_statistic() TO inspector;
 
 
 --
--- TOC entry 4990 (class 0 OID 0)
+-- TOC entry 4991 (class 0 OID 0)
 -- Dependencies: 259
 -- Name: PROCEDURE insert_test_data(IN value integer); Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -2079,7 +2694,7 @@ GRANT ALL ON PROCEDURE buldakov_food.insert_test_data(IN value integer) TO inspe
 
 
 --
--- TOC entry 4991 (class 0 OID 0)
+-- TOC entry 4992 (class 0 OID 0)
 -- Dependencies: 263
 -- Name: FUNCTION rating_change(); Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -2088,7 +2703,7 @@ GRANT ALL ON FUNCTION buldakov_food.rating_change() TO inspector;
 
 
 --
--- TOC entry 4992 (class 0 OID 0)
+-- TOC entry 4993 (class 0 OID 0)
 -- Dependencies: 221
 -- Name: TABLE address; Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -2097,7 +2712,7 @@ GRANT ALL ON TABLE buldakov_food.address TO inspector;
 
 
 --
--- TOC entry 4993 (class 0 OID 0)
+-- TOC entry 4994 (class 0 OID 0)
 -- Dependencies: 220
 -- Name: TABLE client; Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -2106,7 +2721,7 @@ GRANT ALL ON TABLE buldakov_food.client TO inspector;
 
 
 --
--- TOC entry 4994 (class 0 OID 0)
+-- TOC entry 4995 (class 0 OID 0)
 -- Dependencies: 222
 -- Name: TABLE client_address; Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -2115,7 +2730,7 @@ GRANT ALL ON TABLE buldakov_food.client_address TO inspector;
 
 
 --
--- TOC entry 4995 (class 0 OID 0)
+-- TOC entry 4996 (class 0 OID 0)
 -- Dependencies: 224
 -- Name: TABLE courier; Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -2124,7 +2739,7 @@ GRANT ALL ON TABLE buldakov_food.courier TO inspector;
 
 
 --
--- TOC entry 4996 (class 0 OID 0)
+-- TOC entry 4997 (class 0 OID 0)
 -- Dependencies: 228
 -- Name: TABLE courier_pay; Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -2133,7 +2748,7 @@ GRANT ALL ON TABLE buldakov_food.courier_pay TO inspector;
 
 
 --
--- TOC entry 4997 (class 0 OID 0)
+-- TOC entry 4998 (class 0 OID 0)
 -- Dependencies: 226
 -- Name: TABLE "order"; Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -2142,7 +2757,7 @@ GRANT ALL ON TABLE buldakov_food."order" TO inspector;
 
 
 --
--- TOC entry 4998 (class 0 OID 0)
+-- TOC entry 4999 (class 0 OID 0)
 -- Dependencies: 231
 -- Name: TABLE order_structure; Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -2151,7 +2766,7 @@ GRANT ALL ON TABLE buldakov_food.order_structure TO inspector;
 
 
 --
--- TOC entry 4999 (class 0 OID 0)
+-- TOC entry 5000 (class 0 OID 0)
 -- Dependencies: 230
 -- Name: TABLE payment; Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -2160,7 +2775,7 @@ GRANT ALL ON TABLE buldakov_food.payment TO inspector;
 
 
 --
--- TOC entry 5000 (class 0 OID 0)
+-- TOC entry 5001 (class 0 OID 0)
 -- Dependencies: 227
 -- Name: TABLE product; Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -2169,7 +2784,7 @@ GRANT ALL ON TABLE buldakov_food.product TO inspector;
 
 
 --
--- TOC entry 5001 (class 0 OID 0)
+-- TOC entry 5002 (class 0 OID 0)
 -- Dependencies: 225
 -- Name: TABLE product_category; Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -2178,7 +2793,7 @@ GRANT ALL ON TABLE buldakov_food.product_category TO inspector;
 
 
 --
--- TOC entry 5002 (class 0 OID 0)
+-- TOC entry 5003 (class 0 OID 0)
 -- Dependencies: 223
 -- Name: TABLE restaurant; Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -2187,7 +2802,7 @@ GRANT ALL ON TABLE buldakov_food.restaurant TO inspector;
 
 
 --
--- TOC entry 5003 (class 0 OID 0)
+-- TOC entry 5004 (class 0 OID 0)
 -- Dependencies: 229
 -- Name: TABLE review; Type: ACL; Schema: buldakov_food; Owner: postgres
 --
@@ -2195,7 +2810,7 @@ GRANT ALL ON TABLE buldakov_food.restaurant TO inspector;
 GRANT ALL ON TABLE buldakov_food.review TO inspector;
 
 
--- Completed on 2026-11-15 16:49:44
+-- Completed on 2026-11-15 19:02:48
 
 --
 -- PostgreSQL database dump complete
